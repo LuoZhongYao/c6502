@@ -1,0 +1,30 @@
+# Object files
+*.o
+
+# Libraries
+*.lib
+*.a
+
+# Shared objects (inc. Windows DLLs)
+*.dll
+*.so
+*.so.*
+*.dylib
+
+# Executables
+*.exe
+*.out
+*.app
+
+*.txt
+*.log
+*.d
+
+# vim swap file
+*.swap
+# ctags
+tags
+# debug file
+*.src
+# 临时文件价
+mnt/*
