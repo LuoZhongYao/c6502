@@ -22,6 +22,9 @@ static CPURAM *ram = NULL;
 #define N   (cpu.N)
 
 #define RAM (ram->ram)
+#define STACK   (ram->stack)
+
+//static uint8_t STACK[0x100];
 
 static void print_hex(uint8_t *data,size_t len,int index){
     int i = 0;
@@ -38,9 +41,9 @@ static void print_hex(uint8_t *data,size_t len,int index){
     printf("\n");
 }
 
-static void print_cpu(void){
+void printCpu(void){
     printf("C = %1d  Z = %1d  I = %1d  D = %1d  B = %1d  V = %1d  N = %1d\n",C,Z,I,D,B,V,N);
-    printf("A = %02hhX X = %02hhX Y = %02hhX S = %02hhx  \e[31mPC = %04hX\e[0m\n",A.value,X.value,Y.value,S.value,PC);
+    printf("A = %02hhX X = %02hhX Y = %02hhX S = %02hhx\n\e[31mPC = %04hX\e[0m %02X\n",A.value,X.value,Y.value,S.value,PC,RAM[PC]);
 }
 
 void powerOn(void){
@@ -49,6 +52,8 @@ void powerOn(void){
         printf("Power on : Memory Out!\n");
         exit(1);
     }
+    PC = 0x817A;
+    S.value = 0xFF;
 }
 
 void powerOff(void){
@@ -56,28 +61,274 @@ void powerOff(void){
 }
 
 
-#define ADDR8(addr)     ((uint8_t*)(addr))
-#define ADDR16(addr)    ((uint16_t *)(addr))
+#define ADDR8(addr)     ((uint8_t*)(RAM + addr))
+#define ADDR16(addr)    ((uint16_t *)(RAM + addr))
 
-#define OPERAND8    (*ADDR8((RAM + PC + 1)))
-#define OPERAND16   (*ADDR16((RAM + PC + 1)))
+#define VALUE8(v)   (*((uint8_t*)(RAM + v)))
+#define VALUE16(v)   (*((uint16_t*)(RAM + v)))
+
+#define STACK8    (*((uint8_t *)(STACK + S.value)))
+#define STACK16    (*((uint16_t *)(STACK + S.value)))
+
+#define _LUI(v)       (VALUE8(v))                  /*! 立即数寻址 !*/
+#define _ADDR(v)      (RAM[VALUE16(v)])            /*! 直接寻址 !*/
+#define _ZADDR(v)     (RAM[VALUE8(v)])             /*! 零页寻址 !*/
+#define _AADDR(r)     (r.value)                    /*! 隐含寻址 !*/
+#define _ADDRX(v)     (RAM[VALUE16(v) + X.value])  /*! X变址寻址 !*/
+#define _ADDRY(v)     (RAM[VALUE16(v) + Y.value])  /*! Y变址寻址 !*/
+#define _ZADDRX(v)    (RAM[VALUE8(v) + X.value])   /*! 零页X变址 !*/
+#define _ZADDRY(v)    (RAM[VALUE8(v) + Y.value])   /*! 零页Y变址 !*/
+#define _XADDR(v)     (RAM[RAM[VALUE8(v) + X.value] | (RAM[VALUE8(v) + X.value + 1] << 8)])    /*! 先X变址，在间接寻址 !*/
+#define _YADDR(v)     (RAM[((RAM[VALUE8(v)]) | (RAM[VALUE8(v) + 1] << 8)) + Y.value]) /*! 先间接寻址，在Y变址 !*/
+#define _OFFSET(v)    ((int8_t)(VALUE8(v)))  /*! 相对寻址 !*/
+
+#define OPERAND8    (VALUE8(PC + 1))
+#define OPERAND16   (VALUE16(PC + 1))
 
 #define addPC()   (PC += 1)
 #define addPCOperand8() (PC += 2)
 #define addPCOperand16()    (PC += 3)
 
 
-#define LUI()       (OPERAND8)                  /*! 立即数寻址 !*/
-#define ADDR()      (RAM[OPERAND16])            /*! 直接寻址 !*/
-#define ZADDR()     (RAM[OPERAND8])             /*! 零页寻址 !*/
-#define AADDR(r)    (r.value)                   /*! 隐含寻址 !*/
-#define ADDRX()     (RAM[OPERAND16 + X.value])  /*! X变址寻址 !*/
-#define ADDRY()     (RAM[OPERAND16 + Y.value])  /*! Y变址寻址 !*/
-#define ZADDRX()    (RAM[OPERAND8 + X.value])   /*! 零页X变址 !*/
-#define ZADDRY()    (RAM[OPERAND8 + Y.value])   /*! 零页Y变址 !*/
-#define XADDR()     (RAM[RAM[OPERAND8 + X.value] | (RAM[OPERAND8 + X.value + 1] << 8)])    /*! 先X变址，在间接寻址 !*/
-#define YADDR()     (RAM[((RAM[OPERAND8]) | (RAM[OPERAND8 + 1] << 8)) + Y.value]) /*! 先间接寻址，在Y变址 !*/
-#define OFFSET()    ((int8_t)(OPERAND8))  /*! 相对寻址 !*/
+#define LUI()       (_LUI(PC + 1))      /*! 立即数寻址 !*/
+#define ADDR()      (_ADDR(PC + 1))     /*! 直接寻址 !*/
+#define ZADDR()     (_ZADDR(PC + 1))    /*! 零页寻址 !*/
+#define AADDR(r)    (r.value)           /*! 隐含寻址 !*/
+#define ADDRX()     (_ADDRX(PC + 1))    /*! X变址寻址 !*/
+#define ADDRY()     (_ADDRY(PC + 1))    /*! Y变址寻址 !*/
+#define ZADDRX()    (_ZADDRX(PC + 1))   /*! 零页X变址 !*/
+#define ZADDRY()    (_ZADDRY(PC + 1))   /*! 零页Y变址 !*/
+#define XADDR()     (_XADDR(PC + 1))    /*! 先X变址，在间接寻址 !*/
+#define YADDR()     (_YADDR(PC + 1))    /*! 先间接寻址，在Y变址 !*/
+#define OFFSET()    (_OFFSET(PC + 1))   /*! 相对寻址 !*/
+
+
+static inline int print_O(const char *opt,uint16_t addr){
+    printf("%s \e[31m$%04hX\e[0m\t\t;",opt,addr + _OFFSET(addr));
+    return 2;
+}
+static inline int print_XM(const char *opt,uint16_t addr){
+    uint8_t x = X.value,v = VALUE8(addr);
+    uint16_t index = (RAM[v + x]) |  (RAM[v + x + 1] << 8);
+    uint8_t xv = RAM[index];
+    printf("%s (\e[31m$%02hhX\e[0m,\e[34mX\e[0m)\t\t;($%02hhX,%02hhX) [$%04hX] = $%02hX\n",
+            opt,v,v,x,index,xv);
+    return 1;
+}
+
+static inline int print_MY(const char *opt,uint16_t addr){
+    uint8_t y = Y.value,v = _LUI(addr);
+    uint16_t index = ((RAM[v]) |  (RAM[v+ 1] << 8)) + y;
+    uint8_t vy = RAM[index];
+    printf("%s (\e[31m$%02hhX\e[0m),\e[34mY\e[0m\t\t;($%02hhX),%02hhX [$%04hX] = $%02hX\n",
+            opt,v,v,y,index,vy);
+    return 1;
+}
+
+static inline int print_L(const char *opt,uint16_t addr){
+    printf("%s \e[31m#$%02hhX\e[0m\t\t;\n",opt,_LUI(addr));
+    return 1;
+}
+
+static inline int print_A(const char *opt,uint16_t addr){
+    printf("%s \e[31m$%04hX\e[0m\t\t;$%04hX = %02hhX\n",opt,VALUE16(addr),VALUE16(addr),_ADDR(addr));
+    return 2;
+} 
+
+static inline int print_Z(const char *opt,uint16_t addr){
+    printf("%s \e[31m$%02hhX\e[30m\t\t;$%04hX = %02hhX\n",opt,VALUE8(addr),VALUE16(addr),_ZADDR(addr));
+    return 1;
+}
+
+static inline int print_R(const char *opt,uint16_t addr){
+    printf("%s                  ;",opt);
+    return 0;
+}
+
+static inline int print_X(const char *opt,uint16_t addr){
+    printf("%s \e[31m$%04hX\e[0m,\e[34mX\e[0m\t\t;\t$%04hX = $%02hhX\n",opt,*ADDR16(addr),*ADDR16(addr) + X.value,_ADDRX(addr));
+    return 2;
+}
+
+static inline int print_Y(const char *opt,uint16_t addr){
+    printf("%s \e[31m$%04hX\e[0m,\e[34mY\e[0m\t\t;\t$%04hX = $%02hhX\n",opt,*ADDR16(addr),*ADDR16(addr) + Y.value,_ADDRX(addr));
+    return 2;
+}
+
+static inline int print_M(const char *opt,uint16_t addr){
+    printf("%s \e[31m$%04hX\e[0m,\e[34mY\e[0m\t\t;\t$%04hX = $%02hhX\n",opt,VALUE16(addr),VALUE16(addr),VALUE16(VALUE16(addr)));
+    return 2;
+}
+
+static inline int  print_ZX(const char *opt,uint16_t addr){
+    printf("%s \e[31m$%04hX\e[0m,\e[34mX\e[0m\t\t;\t$%02hX = $%02hhX\n",opt,*ADDR8(addr),*ADDR8(addr) + X.value,_ZADDRX(addr));
+    return 1;
+}
+
+static inline int print_ZY(const char *opt,uint16_t addr){
+    printf("%s \e[31m$%04hX\e[0m,\e[34mY\e[0m\t\t;\t$%02hX = $%02hhX\n",opt,*ADDR8(addr),*ADDR8(addr) + Y.value,_ZADDRX(addr));
+    return 1;
+}
+
+
+static int disasm(uint16_t addr){
+    printf("\e[33m%04hX\e[0m:\t%02hhX\t",addr,RAM[PC]);
+    switch(RAM[addr]){
+        default  : printf(" .byte  %02hhX\n",RAM[addr]); return 1;
+        case 0x00: return printf("brk\n") + 1;
+        case 0x01: return print_XM("ora",addr + 1) + 1;
+        case 0x05: return print_Z("ora",addr + 1) + 1;
+        case 0x06: return print_Z("asl",addr + 1) + 1;
+        case 0x08: return printf ("php\n") + 1;
+        case 0x09: return print_L("ora",addr + 1) + 1;
+        case 0x0A: return print_R("asl",addr + 1) + 1;
+        case 0x0D: return print_A("ora",addr + 1) + 1;
+        case 0x0E: return print_A("asl",addr + 1) + 1;
+        case 0x10: return printf ("bpl\n") + 1;
+        case 0x11: return print_MY("ora",addr + 1) + 1;
+        case 0x15: return print_ZX("ora",addr + 1) + 1;
+        case 0x16: return print_ZX("asl",addr + 1) + 1;
+        case 0x18: return printf ("clc\n") + 1;
+        case 0x19: return print_Y("ora",addr + 1) + 1;
+        case 0x1D: return print_X("ora",addr + 1) + 1;
+        case 0x1E: return print_X("asl",addr + 1) + 1;
+        case 0x20: return print_A("jsr",addr + 1) + 1;
+        case 0x21: return print_XM("and",addr + 1) + 1;
+        case 0x24: return print_Z("bit",addr + 1) + 1;
+        case 0x25: return print_Z("and",addr + 1) + 1;
+        case 0x26: return print_Z("rol",addr + 1) + 1;
+        case 0x28: return printf("plp\n") + 1;
+        case 0x29: return print_L("and",addr + 1) + 1;
+        case 0x2A: return print_R("rol",addr + 1) + 1;
+        case 0x2C: return print_A("bit",addr + 1) + 1;
+        case 0x2D: return print_A("and",addr + 1) + 1; 
+        case 0x2E: return print_A("rol",addr + 1) + 1;
+        case 0x30: return printf("bmi\n") + 1;
+        case 0x31: return print_MY("and",addr + 1) + 1;
+        case 0x35: return print_ZX("and",addr + 1) + 1;
+        case 0x36: return print_ZX("rol",addr + 1) + 1;
+        case 0x38: return printf("sec\n") + 1;
+        case 0x39: return print_Y("and",addr + 1) + 1;
+        case 0x3D: return print_X("and",addr + 1) + 1;
+        case 0x3E: return print_X("rol",addr + 1) + 1;
+        case 0x40: return printf("rti\n") + 1;
+        case 0x41: return print_XM("eor",addr + 1) + 1;
+        case 0x45: return print_Z("eor",addr + 1) + 1;
+        case 0x46: return print_Z("lsr",addr + 1) + 1;
+        case 0x48: return printf("pha\n") + 1;
+        case 0x49: return print_L("eor",addr + 1) + 1;
+        case 0x4A: return print_R("lsr",addr + 1) + 1;
+        case 0x4C: return print_A("jmp",addr + 1) + 1;
+        case 0x4D: return print_A("eor",addr + 1) + 1;
+        case 0x4E: return print_A("lsr",addr + 1) + 1;
+        case 0x50: return printf("bvc\n") + 1;
+        case 0x51: return print_MY("eor",addr + 1) + 1;
+        case 0x55: return print_ZX("eor",addr + 1) + 1;
+        case 0x56: return print_ZX("lsr",addr + 1) + 1;
+        case 0x58: return printf("cli\n") + 1;
+        case 0x59: return print_Y("eor",addr + 1) + 1;
+        case 0x5D: return print_X("eor",addr + 1) + 1;
+        case 0x5E: return print_X("lsr",addr + 1) + 1;
+        case 0x60: return printf("rts\n") + 1;
+        case 0x61: return print_XM("adc",addr + 1) + 1;
+        case 0x65: return print_Z("adc",addr + 1) + 1;
+        case 0x66: return print_Z("ror",addr + 1) + 1;
+        case 0x68: return printf("pla\n") + 1;
+        case 0x69: return print_L("adc",addr + 1) + 1;
+        case 0x6A: return print_R("ror",addr + 1) + 1;
+        case 0x6C: return print_M("jmp",addr + 1) + 1;
+        case 0x6D: return print_A("adc",addr + 1) + 1;
+        case 0x6E: return print_A("ror",addr + 1) + 1;
+        case 0x70: return printf("bvs\n") + 1;
+        case 0x71: return print_MY("adc",addr + 1) + 1;
+        case 0x75: return print_ZX("adc",addr + 1) + 1;
+        case 0x76: return print_ZX("ror",addr + 1) + 1;
+        case 0x78: return printf("sei\n") + 1;
+        case 0x79: return print_Y("adc",addr + 1) + 1;
+        case 0x7D: return print_X("adc",addr + 1) + 1;
+        case 0x7E: return print_X("ror",addr + 1) + 1;
+        case 0x81: return print_XM("sta",addr + 1) + 1;
+        case 0x84: return print_Z("sty",addr + 1) + 1;
+        case 0x85: return print_Z("sta",addr + 1) + 1;
+        case 0x86: return print_Z("stx",addr + 1) + 1;
+        case 0x88: return printf("dey\n") + 1;
+        case 0x8A: return printf("txa\n") + 1;
+        case 0x8C: return print_A("sty",addr + 1) + 1;
+        case 0x8D: return print_A("sta",addr + 1) + 1;
+        case 0x8E: return print_A("stx",addr + 1) + 1;
+        case 0x90: return printf("bcc\n") + 1;
+        case 0x91: return print_MY("sta",addr + 1) + 1;
+        case 0x94: return print_ZX("sty",addr + 1) + 1;
+        case 0x95: return print_ZX("sta",addr + 1) + 1;
+        case 0x96: return print_ZY("stx",addr + 1) + 1;
+        case 0x98: return printf("tya\n") + 1;
+        case 0x99: return print_Y("sta",addr + 1) + 1;
+        case 0x9A: return printf("txs\n") + 1;
+        case 0x9D: return print_X("sta",addr + 1) + 1;
+        case 0xA0: return print_L("ldy",addr + 1) + 1;
+        case 0xA1: return print_XM("lda",addr + 1) + 1;
+        case 0xA2: return print_L("ldx",addr + 1) + 1;
+        case 0xA4: return print_Z("ldy",addr + 1) + 1;
+        case 0xA5: return print_Z("lda",addr + 1) + 1;
+        case 0xA6: return print_Z("ldx",addr + 1) + 1;
+        case 0xA8: return printf("tay\n") + 1;
+        case 0xA9: return print_L("lda",addr + 1) + 1;
+        case 0xAA: return printf("tax\n") + 1;
+        case 0xAC: return print_A("ldy",addr + 1) + 1;
+        case 0xAD: return print_A("lda",addr + 1) + 1;
+        case 0xAE: return print_A("ldx",addr + 1) + 1;
+        case 0xB0: return printf("bcs\n") + 1;
+        case 0xB1: return print_MY("lda",addr + 1) + 1;
+        case 0xB4: return print_ZX("ldy",addr + 1) + 1;
+        case 0xB5: return print_ZX("lda",addr + 1) + 1;
+        case 0xB6: return print_ZY("ldx",addr + 1) + 1;
+        case 0xB8: return printf("clv\n") + 1;
+        case 0xB9: return print_Y("lda",addr + 1) + 1;
+        case 0xBA: return printf("tsx\n") + 1;
+        case 0xBC: return print_X("ldy",addr + 1) + 1;
+        case 0xBD: return print_X("lda",addr + 1) + 1;
+        case 0xBE: return print_Y("ldx",addr + 1) + 1;
+        case 0xC0: return print_L("cpy",addr + 1) + 1;
+        case 0xC1: return print_XM("cmp",addr + 1) + 1;
+        case 0xC4: return print_Z("cpy",addr + 1) + 1;
+        case 0xC5: return print_Z("cmp",addr + 1) + 1;
+        case 0xC6: return print_Z("dec",addr + 1) + 1;
+        case 0xC8: return printf("iny\n") + 1;
+        case 0xC9: return print_L("cmp",addr + 1) + 1;
+        case 0xCA: return printf("dex\n") + 1;
+        case 0xCC: return print_A("cpy",addr + 1) + 1;
+        case 0xCD: return print_A("cmp",addr + 1) + 1;
+        case 0xCE: return print_A("dec",addr + 1) + 1;
+        case 0xD0: return printf("bne\n") + 1;
+        case 0xD1: return print_MY("cmp",addr + 1) + 1;
+        case 0xD5: return print_Z("cmp",addr + 1) + 1;
+        case 0xD6: return print_Z("dec",addr + 1) + 1;
+        case 0xD8: return printf("cld\n") + 1;
+        case 0xD9: return print_Y("cmp",addr + 1) + 1;
+        case 0xDD: return print_X("cmp",addr + 1) + 1;
+        case 0xDE: return print_X("dec",addr + 1) + 1;
+        case 0xE0: return print_L("cpx",addr + 1) + 1;
+        case 0xE1: return print_XM("sbc",addr + 1) + 1;
+        case 0xE4: return print_Z("cpx",addr + 1) + 1;
+        case 0xE5: return print_Z("sbc",addr + 1) + 1;
+        case 0xE6: return print_Z("inc",addr + 1) + 1;
+        case 0xE8: return printf("inx\n") + 1;
+        case 0xE9: return print_L("sbc",addr + 1) + 1;
+        case 0xEA: return printf("nop\n") + 1;
+        case 0xEC: return print_A("cpx",addr + 1) + 1;
+        case 0xED: return print_A("sbc",addr + 1) + 1;
+        case 0xEE: return print_A("inc",addr + 1) + 1;
+        case 0xF0: return printf("beq\n") + 1;
+        case 0xF1: return print_MY("sbc",addr + 1) + 1;
+        case 0xF5: return print_Z("sbc",addr + 1) + 1;
+        case 0xF6: return print_Z("inc",addr + 1) + 1;
+        case 0xF8: return printf("sed\n") + 1;
+        case 0xF9: return print_Y("sbc",addr + 1) + 1;
+        case 0xFD: return print_X("sbc",addr + 1) + 1;
+        case 0xFE: return print_X("inc",addr + 1) + 1;
+    }
+}
+
 
 #define zero(v)   ((v.value&0xff) == 0)
 #define nega(v)   (v.s1)
@@ -330,7 +581,8 @@ void powerOff(void){
         C = A.s1;\
         A.value <<= 1;\
         N = A.s1;\
-        Z = zero(A);})
+        Z = zero(A);\
+        addPC();})
 #define asl_Z()     ({asl(ZADDR());addPCOperand8();})
 #define asl_A()     ({asl(ADDR());addPCOperand16();})
 #define asl_ZX()    ({asl(ZADDRX());addPCOperand8();})
@@ -347,7 +599,8 @@ void powerOff(void){
         C = A.value & 1;\
         A.value >>= 1;\
         N = A.s1;\
-        Z = zero(A);})
+        Z = zero(A);\
+        addPC();})
 #define lsr_Z()     ({lsr(ZADDR());addPCOperand8();})
 #define lsr_A()     ({lsr(ADDR());addPCOperand16();})
 #define lsr_ZX()    ({lsr(ZADDRX());addPCOperand8();})
@@ -366,7 +619,8 @@ void powerOff(void){
         A.value |= C;\
         C = A.s2;\
         N = A.s1;\
-        Z = zero(A);})
+        Z = zero(A);\
+        addPC();})
 #define rol_Z()     ({rol(ZADDR());addPCOperand8();})
 #define rol_A()     ({rol(ADDR());addPCOperand16();})
 #define rol_ZX()    ({rol(ZADDRX());addPCOperand8();})
@@ -385,18 +639,19 @@ void powerOff(void){
         C = A.value & 1;\
         A.slue >>= 1;\
         N = A.s1;\
-        Z = zero(A);})
+        Z = zero(A);\
+        addPC();})
 #define ror_Z()     ({ror(ZADDR());addPCOperand8();})
 #define ror_A()     ({ror(ADDR());addPCOperand16();})
 #define ror_ZX()    ({ror(ZADDRX());addPCOperand8();})
 #define ror_X()     ({ror(ADDRX());addPCOperand16();})
 
 #define push(r) ({\
-        RAM[S.value] = r.value;\
-        S.value--; })
+        S.value--;\
+        STACK8 = r.value;})
 
 #define pop(r)  ({\
-        r.value = RAM[S.value];\
+        r.value = STACK8;\
         N = r.s1;\
         Z = zero(r);\
         S.value++;})
@@ -419,199 +674,233 @@ void powerOff(void){
 #define bvs()   cjmp((V))
 #define bvc()   cjmp((!V))
 
-#define jsr()   ({S.value -= 2;RAM[S.value] = (PC + 3) & 0xFF;RAM[S.value + 1] = ((PC + 3)>> 8) & 0xff;PC = OPERAND16;})
-#define rts()   ({PC = RAM[S.value]; PC |= (RAM[S.value+1] << 8);S.value += 2;})
+#define jsr()   ({\
+        S.value -= 2;\
+        STACK16 = PC + 3;\
+        PC = OPERAND16;})
+#define rts()   ({\
+        PC = STACK16;\
+        S.value += 2;})
 
 /*! TODO: !*/
-#define brk()   ({addPC();})
-#define rti()   ({addPC();})
+
+#define _int(v) ({\
+        S.value--;\
+        STACK8 = P.value;\
+        S.value -= 2;\
+        STACK16 = PC + 1;\
+        PC = VALUE16(v);})
+
+#define nmi() _int(0xFFFA)
+#define rst() _int(0xFFFC)
+#define brk() ({B = 1;_int(0xFFFE);})
+#define irq() ({\
+        B = 0;\
+        S.value--;\
+        STACK8 = P.value;\
+        S.value -= 2;\
+        STACK16 = PC;\
+        PC = VALUE16(0xFFFE);})
+#define rti()   ({\
+        PC = STACK16;\
+        S.value += 2;\
+        P.value = STACK8;\
+        S.value++;})
 #define nop()   ({addPC();})
 
 
+#define INPUT_IO    0x4016
+void input(char ch){
+    RAM[INPUT_IO] = ch;
+    irq();
+}
 
-void run(void){
-    while(1){
-#if 1
-        usleep(100000);
-        print_cpu();
-#endif
-        switch(RAM[PC]){
-            default: 
-                {
-                    size_t len = ((0x10000 - PC) / 256) ? 256 : (0x10000 - PC) % 256;
-                    printf("\e[31mInvalid operate %02X in %04X\n\e[00m",RAM[PC],PC);
-                    print_hex(RAM + PC,len,PC);
-                    return;
-                }
-            case 0x00: brk(); break;
-            case 0x01: ora_XM(); break;
-            case 0x05: ora_Z(); break;
-            case 0x06: asl_Z(); break;
-            case 0x08: php(); break;
-            case 0x09: ora_L(); break;
-            case 0x0A: asl_R(); break;
-            case 0x0D: ora_A(); break;
-            case 0x0E: asl_A(); break;
-            case 0x10: bpl(); break;
-            case 0x11: ora_MY(); break;
-            case 0x15: ora_ZX(); break;
-            case 0x16: asl_ZX(); break;
-            case 0x18: clc(); break;
-            case 0x19: ora_Y(); break;
-            case 0x1D: ora_X(); break;
-            case 0x1E: asl_X(); break;
-            case 0x20: jsr(); break;
-            case 0x21: and_XM(); break;
-            case 0x24: bit_Z(); break;
-            case 0x25: and_Z();break;
-            case 0x26: rol_Z();break;
-            case 0x28: plp();break;
-            case 0x29: and_L();break;
-            case 0x2A: rol_R();break;
-            case 0x2C: bit_A();break;
-            case 0x2D: and_A();break; 
-            case 0x2E: rol_A();break;
-            case 0x30: bmi();break;
-            case 0x31: and_MY();break;
-            case 0x35: and_ZX();break;
-            case 0x36: rol_ZX();break;
-            case 0x38: sec();break;
-            case 0x39: and_Y();break;
-            case 0x3D: and_X();break;
-            case 0x3E: rol_X();break;
-            case 0x40: rti();break;
-            case 0x41: eor_XM();break;
-            case 0x45: eor_Z();break;
-            case 0x46: lsr_Z();break;
-            case 0x48: pha();break;
-            case 0x49: eor_L();break;
-            case 0x4A: lsr_R();break;
-            case 0x4C: jmp_A();break;
-            case 0x4D: eor_A();break;
-            case 0x4E: lsr_A();break;
-            case 0x50: bvc();break;
-            case 0x51: eor_MY();break;
-            case 0x55: eor_ZX();break;
-            case 0x56: lsr_ZX();break;
-            case 0x58: cli();break;
-            case 0x59: eor_Y();break;
-            case 0x5D: eor_X();break;
-            case 0x5E: lsr_X();break;
-            case 0x60: rts();break;
-            case 0x61: adc_XM();break;
-            case 0x65: adc_Z();break;
-            case 0x66: ror_Z();break;
-            case 0x68: pla();break;
-            case 0x69: adc_L();break;
-            case 0x6A: ror_R();break;
-            case 0x6C: jmp_M();break;
-            case 0x6D: adc_A();break;
-            case 0x6E: ror_A();break;
-            case 0x70: bvs();break;
-            case 0x71: adc_MY();break;
-            case 0x75: adc_ZX();break;
-            case 0x76: ror_ZX();break;
-            case 0x78: sei();break;
-            case 0x79: adc_Y();break;
-            case 0x7D: adc_X();break;
-            case 0x7E: ror_X();break;
-            case 0x81: sta_XM();break;
-            case 0x84: sty_Z();break;
-            case 0x85: sta_Z();break;
-            case 0x86: stx_Z();break;
-            case 0x88: dey();break;
-            case 0x8A: txa();break;
-            case 0x8C: sty_A();break;
-            case 0x8D: sta_A();break;
-            case 0x8E: stx_A();break;
-            case 0x90: bcc();break;
-            case 0x91: sta_MY();break;
-            case 0x94: sty_ZX();break;
-            case 0x95: sta_ZX();break;
-            case 0x96: stx_ZY();break;
-            case 0x98: tya();break;
-            case 0x99: sta_Y();break;
-            case 0x9A: txs();break;
-            case 0x9D: sta_X();break;
-            case 0xA0: ldy_L();break;
-            case 0xA1: lda_XM();break;
-            case 0xA2: ldx_L();break;
-            case 0xA4: ldy_Z();break;
-            case 0xA5: lda_Z();break;
-            case 0xA6: ldx_Z();break;
-            case 0xA8: tay();break;
-            case 0xA9: lda_L();break;
-            case 0xAA: tax();break;
-            case 0xAC: ldy_A();break;
-            case 0xAD: lda_A();break;
-            case 0xAE: ldx_A();break;
-            case 0xB0: bcs();break;
-            case 0xB1: lda_MY();break;
-            case 0xB4: ldy_ZX();break;
-            case 0xB5: lda_ZX();break;
-            case 0xB6: ldx_ZY();break;
-            case 0xB8: clv();break;
-            case 0xB9: lda_Y();break;
-            case 0xBA: tsx();break;
-            case 0xBC: ldy_X();break;
-            case 0xBD: lda_X();break;
-            case 0xBE: ldx_Y();break;
-            case 0xC0: cpy_L();break;
-            case 0xC1: cmp_XM();break;
-            case 0xC4: cpy_Z();break;
-            case 0xC5: cmp_Z();break;
-            case 0xC6: dec_Z();break;
-            case 0xC8: iny();break;
-            case 0xC9: cmp_L();break;
-            case 0xCA: dex();break;
-            case 0xCC: cpy_A();break;
-            case 0xCD: cmp_A();break;
-            case 0xCE: dec_A();break;
-            case 0xD0: bne();break;
-            case 0xD1: cmp_MY();break;
-            case 0xD5: cmp_Z();break;
-            case 0xD6: dec_Z();break;
-            case 0xD8: cld();break;
-            case 0xD9: cmp_Y();break;
-            case 0xDD: cmp_X();break;
-            case 0xDE: dec_X();break;
-            case 0xE0: cpx_L();break;
-            case 0xE1: sbc_XM();break;
-            case 0xE4: cpx_Z();break;
-            case 0xE5: sbc_Z();break;
-            case 0xE6: inc_Z();break;
-            case 0xE8: inx();break;
-            case 0xE9: sbc_L();break;
-            case 0xEA: nop();break;
-            case 0xEC: cpx_A();break;
-            case 0xED: sbc_A();break;
-            case 0xEE: inc_A();break;
-            case 0xF0: beq();break;
-            case 0xF1: sbc_MY();break;
-            case 0xF5: sbc_Z();break;
-            case 0xF6: inc_Z();break;
-            case 0xF8: sed();break;
-            case 0xF9: sbc_Y();break;
-            case 0xFD: sbc_X();break;
-            case 0xFE: inc_X();break;
-        }
+void output(char ch){
+    putchar(ch);
+}
+
+void runCpu(void (*fn)(void),void (*err)(void)){
+    if(fn) fn();
+    disasm(PC);
+    switch(RAM[PC]){
+        default: 
+            {
+                size_t len = ((0x10000 - PC) / 256) ? 256 : (0x10000 - PC) % 256;
+                printf("\e[31mInvalid operate %02X in %04X\n\e[00m",RAM[PC],PC);
+                print_hex(RAM + PC,len,PC);
+                print_hex(RAM + 0xFF00,256,0xFF00);
+                print_hex(STACK + S.value - 0x10,0xFF - S.value + 0x10,0x100 + S.value - 0x10);
+                if(err) err();
+                break;
+            }
+        case 0x00: brk(); break;
+        case 0x01: ora_XM(); break;
+        case 0x05: ora_Z(); break;
+        case 0x06: asl_Z(); break;
+        case 0x08: php(); break;
+        case 0x09: ora_L(); break;
+        case 0x0A: asl_R(); break;
+        case 0x0D: ora_A(); break;
+        case 0x0E: asl_A(); break;
+        case 0x10: bpl(); break;
+        case 0x11: ora_MY(); break;
+        case 0x15: ora_ZX(); break;
+        case 0x16: asl_ZX(); break;
+        case 0x18: clc(); break;
+        case 0x19: ora_Y(); break;
+        case 0x1D: ora_X(); break;
+        case 0x1E: asl_X(); break;
+        case 0x20: jsr(); break;
+        case 0x21: and_XM(); break;
+        case 0x24: bit_Z(); break;
+        case 0x25: and_Z();break;
+        case 0x26: rol_Z();break;
+        case 0x28: plp();break;
+        case 0x29: and_L();break;
+        case 0x2A: rol_R();break;
+        case 0x2C: bit_A();break;
+        case 0x2D: and_A();break; 
+        case 0x2E: rol_A();break;
+        case 0x30: bmi();break;
+        case 0x31: and_MY();break;
+        case 0x35: and_ZX();break;
+        case 0x36: rol_ZX();break;
+        case 0x38: sec();break;
+        case 0x39: and_Y();break;
+        case 0x3D: and_X();break;
+        case 0x3E: rol_X();break;
+        case 0x40: rti();break;
+        case 0x41: eor_XM();break;
+        case 0x45: eor_Z();break;
+        case 0x46: lsr_Z();break;
+        case 0x48: pha();break;
+        case 0x49: eor_L();break;
+        case 0x4A: lsr_R();break;
+        case 0x4C: jmp_A();break;
+        case 0x4D: eor_A();break;
+        case 0x4E: lsr_A();break;
+        case 0x50: bvc();break;
+        case 0x51: eor_MY();break;
+        case 0x55: eor_ZX();break;
+        case 0x56: lsr_ZX();break;
+        case 0x58: cli();break;
+        case 0x59: eor_Y();break;
+        case 0x5D: eor_X();break;
+        case 0x5E: lsr_X();break;
+        case 0x60: rts();break;
+        case 0x61: adc_XM();break;
+        case 0x65: adc_Z();break;
+        case 0x66: ror_Z();break;
+        case 0x68: pla();break;
+        case 0x69: adc_L();break;
+        case 0x6A: ror_R();break;
+        case 0x6C: jmp_M();break;
+        case 0x6D: adc_A();break;
+        case 0x6E: ror_A();break;
+        case 0x70: bvs();break;
+        case 0x71: adc_MY();break;
+        case 0x75: adc_ZX();break;
+        case 0x76: ror_ZX();break;
+        case 0x78: sei();break;
+        case 0x79: adc_Y();break;
+        case 0x7D: adc_X();break;
+        case 0x7E: ror_X();break;
+        case 0x81: sta_XM();break;
+        case 0x84: sty_Z();break;
+        case 0x85: sta_Z();break;
+        case 0x86: stx_Z();break;
+        case 0x88: dey();break;
+        case 0x8A: txa();break;
+        case 0x8C: sty_A();break;
+        case 0x8D: sta_A();break;
+        case 0x8E: stx_A();break;
+        case 0x90: bcc();break;
+        case 0x91: sta_MY();break;
+        case 0x94: sty_ZX();break;
+        case 0x95: sta_ZX();break;
+        case 0x96: stx_ZY();break;
+        case 0x98: tya();break;
+        case 0x99: sta_Y();break;
+        case 0x9A: txs();break;
+        case 0x9D: sta_X();break;
+        case 0xA0: ldy_L();break;
+        case 0xA1: lda_XM();break;
+        case 0xA2: ldx_L();break;
+        case 0xA4: ldy_Z();break;
+        case 0xA5: lda_Z();break;
+        case 0xA6: ldx_Z();break;
+        case 0xA8: tay();break;
+        case 0xA9: lda_L();break;
+        case 0xAA: tax();break;
+        case 0xAC: ldy_A();break;
+        case 0xAD: lda_A();break;
+        case 0xAE: ldx_A();break;
+        case 0xB0: bcs();break;
+        case 0xB1: lda_MY();break;
+        case 0xB4: ldy_ZX();break;
+        case 0xB5: lda_ZX();break;
+        case 0xB6: ldx_ZY();break;
+        case 0xB8: clv();break;
+        case 0xB9: lda_Y();break;
+        case 0xBA: tsx();break;
+        case 0xBC: ldy_X();break;
+        case 0xBD: lda_X();break;
+        case 0xBE: ldx_Y();break;
+        case 0xC0: cpy_L();break;
+        case 0xC1: cmp_XM();break;
+        case 0xC4: cpy_Z();break;
+        case 0xC5: cmp_Z();break;
+        case 0xC6: dec_Z();break;
+        case 0xC8: iny();break;
+        case 0xC9: cmp_L();break;
+        case 0xCA: dex();break;
+        case 0xCC: cpy_A();break;
+        case 0xCD: cmp_A();break;
+        case 0xCE: dec_A();break;
+        case 0xD0: bne();break;
+        case 0xD1: cmp_MY();break;
+        case 0xD5: cmp_Z();break;
+        case 0xD6: dec_Z();break;
+        case 0xD8: cld();break;
+        case 0xD9: cmp_Y();break;
+        case 0xDD: cmp_X();break;
+        case 0xDE: dec_X();break;
+        case 0xE0: cpx_L();break;
+        case 0xE1: sbc_XM();break;
+        case 0xE4: cpx_Z();break;
+        case 0xE5: sbc_Z();break;
+        case 0xE6: inc_Z();break;
+        case 0xE8: inx();break;
+        case 0xE9: sbc_L();break;
+        case 0xEA: nop();break;
+        case 0xEC: cpx_A();break;
+        case 0xED: sbc_A();break;
+        case 0xEE: inc_A();break;
+        case 0xF0: beq();break;
+        case 0xF1: sbc_MY();break;
+        case 0xF5: sbc_Z();break;
+        case 0xF6: inc_Z();break;
+        case 0xF8: sed();break;
+        case 0xF9: sbc_Y();break;
+        case 0xFD: sbc_X();break;
+        case 0xFE: inc_X();break;
     }
 }
 
 
+void disassembly(uint16_t start,uint16_t size){
+    for(uint16_t addr = start;addr < start + size;){
+        addr += disasm(addr);
+    }
+}
 
-int main(int argc,char **argv){
+void loadRom(const char *rom){
     FILE *fd = NULL;
     int index = 0;
     int cnt = 0;
-    if(argc != 2){
-        printf("usage : %s file\n",argv[0]);
-        return 1;
-    }
-    printf("Loading progrom ...\n");
-    if(NULL == (fd = fopen(argv[1],"r"))){
+    if(NULL == (fd = fopen(rom,"r"))){
         perror("Load program");
-        return 1;
+        exit(1);
     }
     powerOn();
     fseek(fd,0x10,SEEK_SET);
@@ -620,15 +909,9 @@ int main(int argc,char **argv){
             perror("Load program");
             fclose(fd);
             powerOff();
-            return 1;
+            exit(1);
         }
         index += cnt;
     }
-    PC = 0x8000;
-    S.value = 0xFF;
-    print_hex(ram->softRom,256,0x8000);
-    run();
     fclose(fd);
-    powerOff();
-    return 0;
 }

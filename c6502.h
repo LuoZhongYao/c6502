@@ -48,5 +48,13 @@ typedef union{
     uint8_t ram[64 * 1024];
 }CPURAM;
 
+extern void runCpu(void (*fn)(void),void (*err)(void));
+extern void powerOn(void);
+extern void powerOff(void);
+extern void loadRom(const char *rom);
+extern void printCpu(void);
+extern void input(char ch);
+extern void output(char ch);
+extern void disassembly(uint16_t,uint16_t);
 
 #endif

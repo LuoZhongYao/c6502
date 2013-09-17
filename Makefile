@@ -1,6 +1,6 @@
 
 #CFLAGS += -g
-c6502.exe: c6502.o
+nes.exe: main.o c6502.o clock.o
 	gcc $^ -std=c99 -o $@
 
 include /tools/Makefile
